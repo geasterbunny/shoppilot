@@ -1,0 +1,2 @@
+# shoppilot
+Etsy Shop App
