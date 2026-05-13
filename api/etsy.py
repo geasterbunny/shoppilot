@@ -132,7 +132,65 @@ async def get_shop(shop_id: str | int) -> dict[str, Any]:
     return await _request("GET", f"/shops/{shop_id}")
 
 
+_MOCK_LISTINGS: list[dict[str, Any]] = [
+    {
+        "listing_id": 1001001001,
+        "title": "Funny Aussie Mug - 'Maaate' Coffee Mug for Australians",
+        "price": {"amount": 2495, "divisor": 100, "currency_code": "AUD"},
+        "num_favorers": 487,
+        "views": 3210,
+        "tags": ["australian", "funny", "mug", "aussie", "gift"],
+        "shop": {"shop_name": "DownUnderDesigns"},
+    },
+    {
+        "listing_id": 1001001002,
+        "title": "Personalised Kangaroo Wall Art Print - Australian Native Animal Decor",
+        "price": {"amount": 3500, "divisor": 100, "currency_code": "AUD"},
+        "num_favorers": 312,
+        "views": 2104,
+        "tags": ["kangaroo", "wall art", "australian", "native animal", "print"],
+        "shop": {"shop_name": "OutbackPrintCo"},
+    },
+    {
+        "listing_id": 1001001003,
+        "title": "Aussie Pet Portrait - Custom Cattle Dog Watercolour",
+        "price": {"amount": 4995, "divisor": 100, "currency_code": "AUD"},
+        "num_favorers": 198,
+        "views": 1456,
+        "tags": ["pet", "australian", "cattle dog", "custom", "watercolour"],
+        "shop": {"shop_name": "BushDogStudio"},
+    },
+    {
+        "listing_id": 1001001004,
+        "title": "Aussie Slang T-Shirt - 'Heaps Good' Funny Australian Tee",
+        "price": {"amount": 2999, "divisor": 100, "currency_code": "AUD"},
+        "num_favorers": 256,
+        "views": 1890,
+        "tags": ["slang", "tshirt", "funny", "australian", "gift"],
+        "shop": {"shop_name": "TrueBlueThreads"},
+    },
+    {
+        "listing_id": 1001001005,
+        "title": "Australian Dad Father's Day Gift - 'Best Dad in the Outback' Mug",
+        "price": {"amount": 2750, "divisor": 100, "currency_code": "AUD"},
+        "num_favorers": 421,
+        "views": 2876,
+        "tags": ["dad", "father's day", "australian", "outback", "mug"],
+        "shop": {"shop_name": "OzGiftEmporium"},
+    },
+]
+
+
+def _mock_search_listings(query: str, limit: int) -> dict[str, Any]:
+    results = _MOCK_LISTINGS[:limit]
+    return {"count": len(results), "results": results, "_mock": True, "_query": query}
+
+
 async def search_listings(query: str, limit: int = 25) -> dict[str, Any]:
+    # Mock branch runs first and returns immediately — never falls through to
+    # _request() (which would require ETSY_API_KEY + ETSY_ACCESS_TOKEN).
+    if config.MOCK_ETSY:
+        return _mock_search_listings(query, limit)
     params = {"keywords": query, "limit": limit, "includes": "Images"}
     return await _request("GET", "/listings/active", params=params)
 
