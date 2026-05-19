@@ -1,12 +1,15 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from agents import idea_agent, research_agent
 from api import etsy
-from database import ProductIdea, ResearchProduct, get_session, init_db
+from database import Listing, ProductIdea, ResearchProduct, get_session, init_db
+
+DASHBOARD_FILE = Path(__file__).resolve().parent / "dashboard" / "index.html"
 
 _pending_code_verifier: str | None = None
 
@@ -50,9 +53,12 @@ async def auth_etsy_callback(
         )
 
     verifier = _pending_code_verifier
-    _pending_code_verifier = None
+    # NB: do not clear the verifier yet — if the token exchange fails (network,
+    # SSL, Etsy 4xx), we want the user to be able to retry hitting Etsy with the
+    # SAME code_challenge rather than restarting /auth/etsy. Only clear on success.
 
     tokens = await etsy.exchange_code_for_tokens(code, verifier)
+    _pending_code_verifier = None
 
     print("=========== Etsy OAuth tokens ===========")
     print(f"access_token:  {tokens.get('access_token')}")
@@ -66,6 +72,11 @@ async def auth_etsy_callback(
         "status": "ok",
         "message": "Tokens printed to console. Copy them into .env as ETSY_ACCESS_TOKEN and ETSY_REFRESH_TOKEN.",
     }
+
+
+@app.get("/shops/mine")
+async def get_my_shops():
+    return await etsy.get_my_shops()
 
 
 @app.post("/agents/research/run")
@@ -143,3 +154,34 @@ def reject_idea(idea_id: int, db: Session = Depends(get_session)):
     idea.status = "rejected"
     db.commit()
     return {"id": idea.id, "status": idea.status}
+
+
+@app.get("/listings")
+def list_listings(db: Session = Depends(get_session)):
+    """Return all listings joined with the underlying idea title for the dashboard."""
+    rows = (
+        db.query(Listing, ProductIdea.product_title)
+        .outerjoin(ProductIdea, Listing.idea_id == ProductIdea.id)
+        .order_by(Listing.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": listing.id,
+            "idea_id": listing.idea_id,
+            "idea_title": idea_title,
+            "printify_product_id": listing.printify_product_id,
+            "etsy_listing_id": listing.etsy_listing_id,
+            "status": listing.status,
+            "published_at": listing.published_at.isoformat() if listing.published_at else None,
+            "created_at": listing.created_at.isoformat() if listing.created_at else None,
+        }
+        for listing, idea_title in rows
+    ]
+
+
+@app.get("/dashboard")
+def dashboard():
+    if not DASHBOARD_FILE.exists():
+        raise HTTPException(status_code=500, detail=f"Dashboard file missing at {DASHBOARD_FILE}")
+    return FileResponse(DASHBOARD_FILE, media_type="text/html")

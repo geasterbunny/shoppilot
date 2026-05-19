@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ShopPilot — Australian Etsy Automation</title>
+  <style>
+    :root {
+      --green: #1B4332;
+      --green-light: #2D6A4F;
+      --orange: #E07B39;
+      --orange-dark: #C16728;
+      --cream: #FFF8F0;
+      --cream-2: #F5EDDD;
+      --ink: #1B2018;
+      --muted: #6B6258;
+      --line: #D9CFC0;
+      --good: #2D6A4F;
+      --bad: #B23A3A;
+      --warn: #C7882B;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--cream);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.5;
+    }
+
+    header {
+      background: var(--green);
+      color: var(--cream);
+      padding: 18px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 4px solid var(--orange);
+    }
+    header h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+    header .tagline {
+      font-size: 12px;
+      opacity: 0.75;
+      font-weight: 400;
+      margin-top: 2px;
+    }
+    header .right {
+      font-size: 12px;
+      opacity: 0.85;
+    }
+    header .right .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #6FCF97;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 28px;
+    }
+
+    section {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--cream-2);
+    }
+    .section-head h2 {
+      margin: 0;
+      font-size: 16px;
+      color: var(--green);
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .section-head .meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .section-head .actions { display: flex; gap: 8px; }
+
+    .section-body {
+      padding: 16px 20px;
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      transition: background 120ms ease, transform 80ms ease;
+    }
+    button:active { transform: translateY(1px); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary {
+      background: var(--orange);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--orange-dark); }
+
+    .btn-secondary {
+      background: var(--green);
+      color: var(--cream);
+    }
+    .btn-secondary:hover:not(:disabled) { background: var(--green-light); }
+
+    .btn-approve {
+      background: var(--good);
+      color: #fff;
+    }
+    .btn-approve:hover:not(:disabled) { background: #1F4D38; }
+
+    .btn-reject {
+      background: transparent;
+      color: var(--bad);
+      border: 1px solid var(--bad);
+    }
+    .btn-reject:hover:not(:disabled) {
+      background: var(--bad);
+      color: #fff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th {
+      text-align: left;
+      padding: 10px 12px;
+      background: var(--cream-2);
+      color: var(--green);
+      font-weight: 600;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--cream-2);
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .score-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      background: var(--orange);
+      color: #fff;
+      border-radius: 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .ideas-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+    .idea-card {
+      background: var(--cream);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+    }
+    .idea-card.pending_review { border-left: 4px solid var(--warn); }
+    .idea-card.approved { border-left: 4px solid var(--good); background: #F0F7F2; }
+    .idea-card.rejected { border-left: 4px solid var(--bad); background: #FBF3F3; opacity: 0.7; }
+
+    .idea-card .type {
+      display: inline-block;
+      padding: 2px 8px;
+      background: var(--green);
+      color: var(--cream);
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      margin-bottom: 8px;
+      align-self: flex-start;
+    }
+    .idea-card h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      color: var(--green);
+    }
+    .idea-card .desc {
+      font-size: 13px;
+      color: var(--ink);
+      margin-bottom: 10px;
+      flex: 1;
+    }
+    .idea-card .meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .idea-card .meta strong { color: var(--ink); }
+    .idea-card .tags {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 12px;
+      font-family: "SF Mono", Consolas, monospace;
+      word-break: break-word;
+    }
+    .idea-card .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: auto;
+    }
+    .idea-card .actions button { flex: 1; }
+    .idea-card .status-final {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      text-align: center;
+      padding: 8px;
+    }
+
+    .empty {
+      padding: 32px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .empty strong { color: var(--green); display: block; margin-bottom: 4px; }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--green);
+      color: var(--cream);
+      padding: 12px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 150ms ease, transform 150ms ease;
+      z-index: 100;
+      max-width: 360px;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { background: var(--bad); }
+
+    .status-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .status-pill.draft { background: var(--cream-2); color: var(--muted); }
+    .status-pill.live { background: var(--good); color: #fff; }
+    .status-pill.paused { background: var(--warn); color: #fff; }
+
+    .footer-note {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 16px 0 24px;
+    }
+    .footer-note code {
+      background: var(--cream-2);
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>🇦🇺 ShopPilot</h1>
+      <div class="tagline">Australian Etsy automation — researching, ideating, listing.</div>
+    </div>
+    <div class="right">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">Connected</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Research -->
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>1. Research — Trending Australian Listings</h2>
+          <div class="meta" id="research-meta">—</div>
+        </div>
+        <div class="actions">
+          <button class="btn-primary" id="btn-research">Run Research Agent</button>
+        </div>
+      </div>
+      <div class="section-body" id="research-body">
+        <div class="empty">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Ideas -->
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>2. Product Ideas — Awaiting Approval</h2>
+          <div class="meta" id="ideas-meta">—</div>
+        </div>
+        <div class="actions">
+          <button class="btn-secondary" id="btn-ideas">Generate Ideas</button>
+        </div>
+      </div>
+      <div class="section-body" id="ideas-body">
+        <div class="empty">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Listings -->
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>3. Listings — Live on Etsy</h2>
+          <div class="meta" id="listings-meta">—</div>
+        </div>
+      </div>
+      <div class="section-body" id="listings-body">
+        <div class="empty">Loading…</div>
+      </div>
+    </section>
+
+    <div class="footer-note">
+      Dashboard reads from the local FastAPI server. Refresh data anytime by reloading the page. Mock data is shown when <code>MOCK_ETSY=true</code>.
+    </div>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const toast = (msg, isError = false) => {
+      const t = $("toast");
+      t.textContent = msg;
+      t.classList.toggle("error", isError);
+      t.classList.add("show");
+      clearTimeout(window.__toast_timer);
+      window.__toast_timer = setTimeout(() => t.classList.remove("show"), 2800);
+    };
+
+    const fmtAUD = (n) => {
+      if (n == null) return "—";
+      return "$" + Number(n).toFixed(2);
+    };
+    const fmtInt = (n) => (n == null ? "—" : Number(n).toLocaleString());
+    const escapeHTML = (s) =>
+      String(s ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+
+    async function api(path, opts = {}) {
+      try {
+        const r = await fetch(path, opts);
+        if (!r.ok) {
+          const txt = await r.text();
+          throw new Error(`${r.status}: ${txt.slice(0, 200)}`);
+        }
+        return await r.json();
+      } catch (e) {
+        toast(`Error: ${e.message}`, true);
+        throw e;
+      }
+    }
+
+    // ---------- Research ----------
+    function renderResearch(rows) {
+      $("research-meta").textContent = `${rows.length} trending listings tracked`;
+      if (!rows.length) {
+        $("research-body").innerHTML = `
+          <div class="empty">
+            <strong>No research yet</strong>
+            Click <em>Run Research Agent</em> to find trending Aussie listings.
+          </div>`;
+        return;
+      }
+      const trs = rows.map((r) => `
+        <tr>
+          <td><span class="score-badge">${(r.score ?? 0).toFixed(1)}</span></td>
+          <td>${escapeHTML(r.title)}</td>
+          <td>${escapeHTML(r.shop_name ?? "")}</td>
+          <td class="num">${fmtAUD(r.price)}</td>
+          <td class="num">${fmtInt(r.favourites)}</td>
+          <td class="num">${fmtInt(r.views)}</td>
+        </tr>`).join("");
+      $("research-body").innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th style="width:80px">Score</th>
+              <th>Title</th>
+              <th style="width:160px">Shop</th>
+              <th class="num" style="width:90px">Price</th>
+              <th class="num" style="width:90px">Faves</th>
+              <th class="num" style="width:90px">Views</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>`;
+    }
+
+    // ---------- Ideas ----------
+    function renderIdeas(rows) {
+      const pending = rows.filter(r => r.status === "pending_review").length;
+      $("ideas-meta").textContent = `${rows.length} ideas (${pending} awaiting review)`;
+      if (!rows.length) {
+        $("ideas-body").innerHTML = `
+          <div class="empty">
+            <strong>No ideas yet</strong>
+            Run research first, then click <em>Generate Ideas</em>.
+          </div>`;
+        return;
+      }
+      const cards = rows.map((r) => {
+        const status = r.status || "pending_review";
+        const actions = status === "pending_review"
+          ? `<div class="actions">
+               <button class="btn-approve" data-action="approve" data-id="${r.id}">Approve</button>
+               <button class="btn-reject"  data-action="reject"  data-id="${r.id}">Reject</button>
+             </div>`
+          : `<div class="status-final">${status}</div>`;
+        return `
+          <div class="idea-card ${status}">
+            <span class="type">${escapeHTML(r.product_type ?? "")}</span>
+            <h3>${escapeHTML(r.product_title ?? "")}</h3>
+            <div class="desc">${escapeHTML(r.description ?? "")}</div>
+            <div class="meta"><strong>Buyer:</strong> ${escapeHTML(r.target_buyer ?? "")}</div>
+            <div class="meta"><strong>Printify:</strong> ${escapeHTML(r.printify_search_term ?? "")}</div>
+            <div class="tags">${escapeHTML(r.tags ?? "")}</div>
+            ${actions}
+          </div>`;
+      }).join("");
+      $("ideas-body").innerHTML = `<div class="ideas-grid">${cards}</div>`;
+    }
+
+    // ---------- Listings ----------
+    function renderListings(rows) {
+      $("listings-meta").textContent = `${rows.length} listings`;
+      if (!rows.length) {
+        $("listings-body").innerHTML = `
+          <div class="empty">
+            <strong>No listings yet</strong>
+            Approve an idea to start the supplier → listing pipeline.
+          </div>`;
+        return;
+      }
+      const trs = rows.map((r) => {
+        const etsyLink = r.etsy_listing_id
+          ? `<a href="https://www.etsy.com/listing/${escapeHTML(r.etsy_listing_id)}" target="_blank" rel="noopener">${escapeHTML(r.etsy_listing_id)}</a>`
+          : "—";
+        return `
+          <tr>
+            <td>#${r.id}</td>
+            <td>${escapeHTML(r.idea_title ?? "—")}</td>
+            <td><span class="status-pill ${r.status}">${escapeHTML(r.status)}</span></td>
+            <td>${etsyLink}</td>
+            <td>${escapeHTML(r.printify_product_id ?? "—")}</td>
+            <td>${r.published_at ? new Date(r.published_at).toLocaleString("en-AU") : "—"}</td>
+          </tr>`;
+      }).join("");
+      $("listings-body").innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th style="width:60px">ID</th>
+              <th>Idea</th>
+              <th style="width:100px">Status</th>
+              <th style="width:180px">Etsy Listing</th>
+              <th style="width:180px">Printify Product</th>
+              <th style="width:170px">Published</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>`;
+    }
+
+    // ---------- Loaders ----------
+    async function loadAll() {
+      const [research, ideas, listings] = await Promise.all([
+        api("/research").catch(() => []),
+        api("/ideas").catch(() => []),
+        api("/listings").catch(() => [])
+      ]);
+      renderResearch(research);
+      renderIdeas(ideas);
+      renderListings(listings);
+    }
+
+    // ---------- Actions ----------
+    $("btn-research").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      b.textContent = "Running…";
+      try {
+        const out = await api("/agents/research/run", { method: "POST" });
+        toast(`Research done — query "${out.query}", saved ${out.saved} new`);
+        await loadAll();
+      } catch (_) {
+        // toast already shown
+      } finally {
+        b.disabled = false;
+        b.textContent = "Run Research Agent";
+      }
+    });
+
+    $("btn-ideas").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      b.textContent = "Generating…";
+      try {
+        const out = await api("/agents/idea/run", { method: "POST" });
+        if (out.status === "skipped") {
+          toast(`Skipped — ${out.reason}`, true);
+        } else {
+          toast(`Generated ${out.ideas_generated} ideas`);
+        }
+        await loadAll();
+      } catch (_) {
+      } finally {
+        b.disabled = false;
+        b.textContent = "Generate Ideas";
+      }
+    });
+
+    // Approve / reject via event delegation
+    $("ideas-body").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const id = btn.dataset.id;
+      btn.disabled = true;
+      try {
+        await api(`/ideas/${id}/${action}`, { method: "POST" });
+        toast(`Idea ${id} ${action}d`);
+        await loadAll();
+      } catch (_) {
+        btn.disabled = false;
+      }
+    });
+
+    // Boot
+    loadAll();
+  </script>
+</body>
+</html>
