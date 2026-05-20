@@ -289,6 +289,27 @@
     .status-pill.live { background: var(--good); color: #fff; }
     .status-pill.paused { background: var(--warn); color: #fff; }
 
+    .platform-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: capitalize;
+      color: #fff;
+    }
+    .platform-pill.instagram { background: #E1306C; }
+    .platform-pill.facebook  { background: #1877F2; }
+    .platform-pill.pinterest { background: #BD081C; }
+
+    .post-content {
+      white-space: pre-wrap;
+      font-size: 13px;
+      color: var(--ink);
+      line-height: 1.4;
+      max-width: 540px;
+    }
+
     .footer-note {
       text-align: center;
       color: var(--muted);
@@ -316,6 +337,22 @@
   </header>
 
   <main>
+    <!-- Scheduler -->
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>⏱ Scheduler — Background Jobs</h2>
+          <div class="meta" id="scheduler-meta">—</div>
+        </div>
+        <div class="actions">
+          <button class="btn-secondary" id="btn-scheduler-trigger">Run Research Now</button>
+        </div>
+      </div>
+      <div class="section-body" id="scheduler-body">
+        <div class="empty">Loading…</div>
+      </div>
+    </section>
+
     <!-- Research -->
     <section>
       <div class="section-head">
@@ -348,15 +385,50 @@
       </div>
     </section>
 
+    <!-- Suppliers -->
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>3. Suppliers — Matched AU Print Providers</h2>
+          <div class="meta" id="suppliers-meta">—</div>
+        </div>
+        <div class="actions">
+          <button class="btn-secondary" id="btn-suppliers">Match Suppliers</button>
+        </div>
+      </div>
+      <div class="section-body" id="suppliers-body">
+        <div class="empty">Loading…</div>
+      </div>
+    </section>
+
     <!-- Listings -->
     <section>
       <div class="section-head">
         <div>
-          <h2>3. Listings — Live on Etsy</h2>
+          <h2>4. Listings — Live on Etsy</h2>
           <div class="meta" id="listings-meta">—</div>
+        </div>
+        <div class="actions">
+          <button class="btn-primary" id="btn-listings">Publish Listings</button>
         </div>
       </div>
       <div class="section-body" id="listings-body">
+        <div class="empty">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Marketing -->
+    <section>
+      <div class="section-head">
+        <div>
+          <h2>5. Marketing — Scheduled Social Posts</h2>
+          <div class="meta" id="marketing-meta">—</div>
+        </div>
+        <div class="actions">
+          <button class="btn-secondary" id="btn-marketing">Schedule Posts</button>
+        </div>
+      </div>
+      <div class="section-body" id="marketing-body">
         <div class="empty">Loading…</div>
       </div>
     </section>
@@ -401,6 +473,43 @@
         toast(`Error: ${e.message}`, true);
         throw e;
       }
+    }
+
+    // ---------- Scheduler ----------
+    function renderScheduler(rows) {
+      $("scheduler-meta").textContent = `${rows.length} job(s) scheduled`;
+      if (!rows.length) {
+        $("scheduler-body").innerHTML = `
+          <div class="empty">
+            <strong>No jobs scheduled</strong>
+            The scheduler may not be running. Restart the server.
+          </div>`;
+        return;
+      }
+      const trs = rows.map((r) => {
+        const when = r.next_run_time
+          ? new Date(r.next_run_time).toLocaleString("en-AU")
+          : "—";
+        return `
+          <tr>
+            <td><strong>${escapeHTML(r.id)}</strong></td>
+            <td>${escapeHTML(r.name)}</td>
+            <td>${when}</td>
+            <td><code style="font-size:11px; color: var(--muted)">${escapeHTML(r.trigger)}</code></td>
+          </tr>`;
+      }).join("");
+      $("scheduler-body").innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th style="width:160px">Job ID</th>
+              <th style="width:200px">Name</th>
+              <th style="width:200px">Next Run</th>
+              <th>Trigger</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>`;
     }
 
     // ---------- Research ----------
@@ -473,6 +582,51 @@
       $("ideas-body").innerHTML = `<div class="ideas-grid">${cards}</div>`;
     }
 
+    // ---------- Suppliers ----------
+    function renderSuppliers(rows) {
+      $("suppliers-meta").textContent = `${rows.length} matches`;
+      if (!rows.length) {
+        $("suppliers-body").innerHTML = `
+          <div class="empty">
+            <strong>No supplier matches yet</strong>
+            Approve an idea, then click <em>Match Suppliers</em> to pick the cheapest AU print provider.
+          </div>`;
+        return;
+      }
+      const trs = rows.map((r) => {
+        let variantCount = "—";
+        try {
+          const ids = JSON.parse(r.variant_ids || "[]");
+          variantCount = Array.isArray(ids) ? ids.length : "—";
+        } catch (_) {}
+        return `
+          <tr>
+            <td>#${r.id}</td>
+            <td>${escapeHTML(r.idea_title ?? "—")}</td>
+            <td>${escapeHTML(r.provider_name ?? "—")}</td>
+            <td class="num">${escapeHTML(r.blueprint_id ?? "—")}</td>
+            <td class="num">${escapeHTML(r.print_provider_id ?? "—")}</td>
+            <td class="num">${variantCount}</td>
+            <td class="num">${fmtAUD(r.base_cost)}</td>
+          </tr>`;
+      }).join("");
+      $("suppliers-body").innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th style="width:60px">ID</th>
+              <th>Idea</th>
+              <th style="width:200px">Provider</th>
+              <th class="num" style="width:100px">Blueprint</th>
+              <th class="num" style="width:100px">Provider ID</th>
+              <th class="num" style="width:90px">Variants</th>
+              <th class="num" style="width:100px">Base Cost</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>`;
+    }
+
     // ---------- Listings ----------
     function renderListings(rows) {
       $("listings-meta").textContent = `${rows.length} listings`;
@@ -514,16 +668,61 @@
         </table>`;
     }
 
+    // ---------- Marketing ----------
+    function renderMarketing(rows) {
+      $("marketing-meta").textContent = `${rows.length} scheduled posts`;
+      if (!rows.length) {
+        $("marketing-body").innerHTML = `
+          <div class="empty">
+            <strong>No marketing posts yet</strong>
+            Publish a listing, then click <em>Schedule Posts</em> to generate IG / FB / Pinterest content.
+          </div>`;
+        return;
+      }
+      const trs = rows.map((r) => {
+        const when = r.scheduled_at
+          ? new Date(r.scheduled_at).toLocaleString("en-AU")
+          : "—";
+        return `
+          <tr>
+            <td>#${r.id}</td>
+            <td>${escapeHTML(r.idea_title ?? "—")}</td>
+            <td><span class="platform-pill ${r.platform}">${escapeHTML(r.platform)}</span></td>
+            <td><div class="post-content">${escapeHTML(r.post_content ?? "")}</div></td>
+            <td>${when}</td>
+          </tr>`;
+      }).join("");
+      $("marketing-body").innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th style="width:60px">ID</th>
+              <th style="width:200px">Idea</th>
+              <th style="width:110px">Platform</th>
+              <th>Post</th>
+              <th style="width:170px">Scheduled</th>
+            </tr>
+          </thead>
+          <tbody>${trs}</tbody>
+        </table>`;
+    }
+
     // ---------- Loaders ----------
     async function loadAll() {
-      const [research, ideas, listings] = await Promise.all([
+      const [jobs, research, ideas, suppliers, listings, marketing] = await Promise.all([
+        api("/scheduler/jobs").catch(() => []),
         api("/research").catch(() => []),
         api("/ideas").catch(() => []),
-        api("/listings").catch(() => [])
+        api("/suppliers").catch(() => []),
+        api("/listings").catch(() => []),
+        api("/marketing").catch(() => [])
       ]);
+      renderScheduler(jobs);
       renderResearch(research);
       renderIdeas(ideas);
+      renderSuppliers(suppliers);
       renderListings(listings);
+      renderMarketing(marketing);
     }
 
     // ---------- Actions ----------
@@ -559,6 +758,78 @@
       } finally {
         b.disabled = false;
         b.textContent = "Generate Ideas";
+      }
+    });
+
+    $("btn-scheduler-trigger").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      b.textContent = "Running…";
+      try {
+        const out = await api("/scheduler/research/trigger", { method: "POST" });
+        const saved = out.research?.saved ?? 0;
+        toast(`Research ran (saved ${saved}); idea job queued for ${new Date(out.idea_job_queued_for).toLocaleString("en-AU")}`);
+        await loadAll();
+      } catch (_) {
+      } finally {
+        b.disabled = false;
+        b.textContent = "Run Research Now";
+      }
+    });
+
+    $("btn-marketing").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      b.textContent = "Scheduling…";
+      try {
+        const out = await api("/agents/marketing/run", { method: "POST" });
+        const skipped = (out.skipped || []).length;
+        const suffix = skipped ? ` (${skipped} skipped)` : "";
+        toast(`Scheduled posts for ${out.processed ?? 0} listing(s)${suffix}`);
+        await loadAll();
+      } catch (_) {
+      } finally {
+        b.disabled = false;
+        b.textContent = "Schedule Posts";
+      }
+    });
+
+    $("btn-listings").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      b.textContent = "Publishing…";
+      try {
+        const out = await api("/agents/listing/run", { method: "POST" });
+        const skipped = (out.skipped || []).length;
+        const warnings = (out.warnings || []).length;
+        const extra = [
+          skipped ? `${skipped} skipped` : null,
+          warnings ? `${warnings} warning(s)` : null,
+        ].filter(Boolean).join(", ");
+        const suffix = extra ? ` (${extra})` : "";
+        toast(`Published ${out.published ?? 0} listing(s)${suffix}`);
+        await loadAll();
+      } catch (_) {
+      } finally {
+        b.disabled = false;
+        b.textContent = "Publish Listings";
+      }
+    });
+
+    $("btn-suppliers").addEventListener("click", async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      b.textContent = "Matching…";
+      try {
+        const out = await api("/agents/supplier/run", { method: "POST" });
+        const skipped = (out.skipped || []).length;
+        const skipNote = skipped ? `, ${skipped} skipped` : "";
+        toast(`Matched ${out.matched ?? 0} idea(s)${skipNote}`);
+        await loadAll();
+      } catch (_) {
+      } finally {
+        b.disabled = false;
+        b.textContent = "Match Suppliers";
       }
     });
 

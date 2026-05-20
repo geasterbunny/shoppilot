@@ -5,9 +5,24 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from agents import idea_agent, research_agent
+import scheduler as scheduler_module
+from agents import (
+    idea_agent,
+    listing_agent,
+    marketing_agent,
+    research_agent,
+    supplier_agent,
+)
 from api import etsy
-from database import Listing, ProductIdea, ResearchProduct, get_session, init_db
+from database import (
+    Listing,
+    MarketingPost,
+    ProductIdea,
+    ResearchProduct,
+    SupplierProduct,
+    get_session,
+    init_db,
+)
 
 DASHBOARD_FILE = Path(__file__).resolve().parent / "dashboard" / "index.html"
 
@@ -17,7 +32,11 @@ _pending_code_verifier: str | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    scheduler_module.start()
+    try:
+        yield
+    finally:
+        scheduler_module.shutdown()
 
 
 app = FastAPI(title="ShopPilot", lifespan=lifespan)
@@ -156,6 +175,41 @@ def reject_idea(idea_id: int, db: Session = Depends(get_session)):
     return {"id": idea.id, "status": idea.status}
 
 
+@app.post("/agents/supplier/run")
+async def run_supplier_agent(db: Session = Depends(get_session)):
+    return await supplier_agent.run(db)
+
+
+@app.get("/suppliers")
+def list_suppliers(db: Session = Depends(get_session)):
+    """Return supplier matches joined with idea title for the dashboard."""
+    rows = (
+        db.query(SupplierProduct, ProductIdea.product_title)
+        .outerjoin(ProductIdea, SupplierProduct.idea_id == ProductIdea.id)
+        .order_by(SupplierProduct.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": supplier.id,
+            "idea_id": supplier.idea_id,
+            "idea_title": idea_title,
+            "blueprint_id": supplier.blueprint_id,
+            "print_provider_id": supplier.print_provider_id,
+            "provider_name": supplier.provider_name,
+            "variant_ids": supplier.variant_ids,
+            "base_cost": supplier.base_cost,
+            "created_at": supplier.created_at.isoformat() if supplier.created_at else None,
+        }
+        for supplier, idea_title in rows
+    ]
+
+
+@app.post("/agents/listing/run")
+async def run_listing_agent(db: Session = Depends(get_session)):
+    return await listing_agent.run(db)
+
+
 @app.get("/listings")
 def list_listings(db: Session = Depends(get_session)):
     """Return all listings joined with the underlying idea title for the dashboard."""
@@ -178,6 +232,48 @@ def list_listings(db: Session = Depends(get_session)):
         }
         for listing, idea_title in rows
     ]
+
+
+@app.post("/agents/marketing/run")
+async def run_marketing_agent(db: Session = Depends(get_session)):
+    return await marketing_agent.run(db)
+
+
+@app.get("/marketing")
+def list_marketing_posts(db: Session = Depends(get_session)):
+    """Return marketing posts joined with the underlying idea title."""
+    rows = (
+        db.query(MarketingPost, ProductIdea.product_title)
+        .outerjoin(Listing, MarketingPost.listing_id == Listing.id)
+        .outerjoin(ProductIdea, Listing.idea_id == ProductIdea.id)
+        .order_by(MarketingPost.scheduled_at.asc())
+        .all()
+    )
+    return [
+        {
+            "id": post.id,
+            "listing_id": post.listing_id,
+            "idea_title": idea_title,
+            "platform": post.platform,
+            "post_content": post.post_content,
+            "postiz_post_id": post.postiz_post_id,
+            "scheduled_at": post.scheduled_at.isoformat() if post.scheduled_at else None,
+            "created_at": post.created_at.isoformat() if post.created_at else None,
+        }
+        for post, idea_title in rows
+    ]
+
+
+@app.get("/scheduler/jobs")
+def list_scheduled_jobs():
+    """Snapshot of currently-scheduled jobs (research + chained idea_job)."""
+    return scheduler_module.list_jobs()
+
+
+@app.post("/scheduler/research/trigger")
+async def trigger_research_now():
+    """Kick the research job out-of-cycle. Idea job is auto-queued ~1h after."""
+    return await scheduler_module.trigger_research_now()
 
 
 @app.get("/dashboard")

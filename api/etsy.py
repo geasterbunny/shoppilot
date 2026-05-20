@@ -117,17 +117,17 @@ async def refresh_access_token() -> dict[str, Any]:
 
 
 def _auth_headers() -> dict[str, str]:
-    # Etsy v3 quirk: the x-api-key header expects the *shared secret*, not the
-    # keystring. The keystring is only used as the OAuth client_id. If
-    # ETSY_SHARED_SECRET isn't set we fall back to the keystring so existing
-    # callers don't break in mock/dev mode, but real API calls will 403.
-    api_key = config.ETSY_SHARED_SECRET or config.ETSY_API_KEY
-    if not api_key:
-        raise RuntimeError("ETSY_API_KEY/ETSY_SHARED_SECRET not set in config/.env")
+    # Empirical: Etsy v3 wants the SHARED SECRET in x-api-key, not the
+    # keystring (despite their own docs sometimes saying otherwise). With the
+    # keystring you get "Shared secret is required in x-api-key header". With
+    # the shared secret you get "incorrect shared secret" if the value is
+    # stale — but the request reaches the auth layer.
+    if not config.ETSY_SHARED_SECRET:
+        raise RuntimeError("ETSY_SHARED_SECRET is not set in config/.env")
     if not config.ETSY_ACCESS_TOKEN:
         raise RuntimeError("ETSY_ACCESS_TOKEN is not set in config/.env")
     return {
-        "x-api-key": api_key,
+        "x-api-key": config.ETSY_SHARED_SECRET,
         "Authorization": f"Bearer {config.ETSY_ACCESS_TOKEN}",
     }
 
