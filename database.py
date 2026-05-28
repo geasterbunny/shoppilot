@@ -7,7 +7,9 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    text,
 )
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.sql import func
 
@@ -58,6 +60,7 @@ class SupplierProduct(Base):
     provider_name = Column(Text)
     variant_ids = Column(Text)
     base_cost = Column(Float)
+    image_id = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.current_timestamp())
 
 
@@ -87,6 +90,15 @@ class MarketingPost(Base):
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    # Lightweight in-place migration for SQLite: add image_id to existing DBs
+    # that were created before this column existed. SQLite raises
+    # OperationalError ("duplicate column name: image_id") when the column is
+    # already present — that's fine, swallow it.
+    with engine.begin() as conn:
+        try:
+            conn.execute(text("ALTER TABLE supplier_products ADD COLUMN image_id TEXT"))
+        except OperationalError:
+            pass
 
 
 def get_session():

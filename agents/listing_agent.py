@@ -57,6 +57,33 @@ def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) -> dic
         {"id": vid, "price": price_cents, "is_enabled": True}
         for vid in variant_ids
     ]
+    # Live Printify needs print_areas describing where each image sits on each
+    # variant. The design_agent populates supplier.image_id; if it hasn't run
+    # yet we omit print_areas entirely so create_product can still draft in
+    # mock mode without a placeholder.
+    print_areas = (
+        [
+            {
+                "variant_ids": variant_ids,
+                "placeholders": [
+                    {
+                        "position": "front",
+                        "images": [
+                            {
+                                "id": supplier.image_id or "mock_image",
+                                "x": 0.5,
+                                "y": 0.5,
+                                "scale": 1.0,
+                                "angle": 0,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        if supplier.image_id
+        else []
+    )
     return {
         "title": idea.product_title or "",
         "description": idea.description or "",
@@ -64,9 +91,7 @@ def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) -> dic
         "print_provider_id": supplier.print_provider_id,
         "variants": variants,
         "tags": _tags_list(idea.tags),
-        # print_areas is required by live Printify, but we don't yet have a
-        # design pipeline. Mock mode ignores this; live mode will need it.
-        "print_areas": [],
+        "print_areas": print_areas,
     }
 
 

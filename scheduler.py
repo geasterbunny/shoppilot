@@ -9,11 +9,13 @@ Design notes:
   When it finishes, it schedules a one-shot `idea_job` for IDEA_DELAY_AFTER_RESEARCH
   minutes later. Chaining via a one-shot job (rather than a fixed interval)
   keeps the timing correct even if research runs late.
-- Supplier / listing / marketing agents stay manually-triggered via the
-  dashboard buttons — they each have a human-approval gate (approving ideas,
-  reviewing live listings, sanity-checking generated social copy) that we
-  don't want to bypass automatically yet. Their endpoints already exist for
-  when we're ready to chain them.
+- Supplier / design / listing / marketing agents stay manually-triggered via
+  the dashboard buttons — they each have a human-approval gate (approving
+  ideas, reviewing generated artwork, sanity-checking live listings and social
+  copy) that we don't want to bypass automatically yet. Their endpoints already
+  exist for when we're ready to chain them. The full pipeline order is:
+  research_agent → idea_agent → supplier_agent → design_agent → listing_agent
+  → marketing_agent
 
 The scheduler is started from main.py's `lifespan` context manager so it
 shuts down cleanly with the app.
@@ -29,7 +31,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from agents import idea_agent, research_agent
+from agents import design_agent, idea_agent, listing_agent, marketing_agent, research_agent, supplier_agent  # noqa: F401
 from database import SessionLocal
 
 logger = logging.getLogger("shoppilot.scheduler")

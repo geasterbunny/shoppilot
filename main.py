@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 import scheduler as scheduler_module
 from agents import (
+    design_agent,
     idea_agent,
     listing_agent,
     marketing_agent,
@@ -203,6 +204,11 @@ def list_suppliers(db: Session = Depends(get_session)):
         }
         for supplier, idea_title in rows
     ]
+
+
+@app.post("/run/design")
+async def run_design_agent(db: Session = Depends(get_session)):
+    return await design_agent.run(db)
 
 
 @app.post("/agents/listing/run")

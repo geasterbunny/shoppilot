@@ -37,6 +37,35 @@ PRODUCT_TYPE_TO_BLUEPRINT_KEYWORDS: dict[str, list[str]] = {
     "greeting_card": ["card", "greeting"],
 }
 
+# Printify provider IDs that are physically located in Australia. Discovered
+# via /v1/catalog/print_providers.json — the per-blueprint providers endpoint
+# we call elsewhere returns a lightweight shape WITHOUT a location field, so
+# we can't rely on provider["location"]["country"] there. Hard-coding the
+# small set of AU provider IDs is the only reliable signal for that endpoint.
+#  - 34 = The Print Bar (Teneriffe, QLD) — apparel-heavy (tees, hoodies, totes)
+#  - 66 = Prima Printing (Noble Park North, VIC) — homewares, cards, posters, mugs
+AU_PROVIDER_IDS: set[int] = {34, 66}
+
+# Approximate base costs (AUD) per product type. Used as a floor when the
+# catalog variants endpoint doesn't expose a price — which is always, because
+# Printify's /catalog/.../variants.json returns only id/title/options/
+# placeholders/decoration_methods. There is no documented public catalog
+# endpoint that returns provider base cost; the real number only surfaces on
+# the create-product response. These values are conservative estimates for AU
+# POD pricing and exist so listing_agent doesn't accidentally publish at the
+# $1.95 floor. Tune them once you've seen what Printify charges on a real
+# product (Printify dashboard > catalog OR your first /shops/.../products.json
+# create response).
+_DEFAULT_BASE_COST_AUD: dict[str, float] = {
+    "mug":           9.00,
+    "tote":         13.00,
+    "t-shirt":      18.00,
+    "tshirt":       18.00,
+    "poster":       11.00,
+    "card":          4.50,
+    "greeting_card": 4.50,
+}
+
 
 def _normalise_product_type(raw: str | None) -> str:
     if not raw:
@@ -44,24 +73,38 @@ def _normalise_product_type(raw: str | None) -> str:
     return raw.strip().lower().replace(" ", "_")
 
 
-def _pick_blueprint(product_type: str, blueprints: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the first blueprint whose title or type field matches our keyword list."""
+def _matching_blueprints(product_type: str, blueprints: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return EVERY blueprint whose title/type/brand/model matches our keyword list.
+
+    Returning a list (not just the first) lets the resolver iterate until it
+    finds a blueprint that's actually producible in AU — many keyword-matching
+    blueprints have no AU provider, so 'first match' would falsely fail.
+    """
     keywords = PRODUCT_TYPE_TO_BLUEPRINT_KEYWORDS.get(product_type, [])
     if not keywords:
-        return None
+        return []
+    out: list[dict[str, Any]] = []
     for bp in blueprints:
         haystack = " ".join(
             str(bp.get(field, "")).lower() for field in ("title", "type", "brand", "model")
         )
         if any(k in haystack for k in keywords):
-            return bp
-    return None
+            out.append(bp)
+    return out
 
 
 def _is_au(provider: dict[str, Any]) -> bool:
-    location = provider.get("location") or {}
-    country = (location.get("country") or location.get("country_code") or "").upper()
-    return country == "AU"
+    """True if this provider is one of the known AU print houses.
+
+    Why id-based and not location-based: the /catalog/blueprints/{bp}/print_providers.json
+    endpoint returns only {id, title, decoration_methods} — there's no location
+    field at all. Checking provider["location"]["country"] always returns False
+    there, even for The Print Bar / Prima Printing. The global providers list
+    has location data, but cross-referencing 1409 blueprints against it on every
+    run would be wasteful. The set of AU providers on Printify is tiny and
+    stable, so a hard-coded id set is the right tradeoff.
+    """
+    return provider.get("id") in AU_PROVIDER_IDS
 
 
 def _min_variant_price(variants: list[dict[str, Any]]) -> float:
@@ -76,6 +119,13 @@ def _min_variant_price(variants: list[dict[str, Any]]) -> float:
 async def _resolve_provider_for_idea(idea: ProductIdea) -> dict[str, Any]:
     """Run the catalogue lookup for a single idea and return a result dict.
 
+    Iterates every blueprint whose title matches our keyword list, fetches its
+    provider list, and considers only providers in AU_PROVIDER_IDS. Among all
+    (blueprint, AU provider) pairs with available variants, returns the
+    cheapest by base variant price. Stops scanning early once we've found a
+    confirmed AU-producible blueprint with cost data — most product types only
+    need to look at the first few matches.
+
     Result keys:
       ok                    -> bool
       reason                -> str (when not ok)
@@ -87,40 +137,51 @@ async def _resolve_provider_for_idea(idea: ProductIdea) -> dict[str, Any]:
     """
     product_type = _normalise_product_type(idea.product_type)
     blueprints = await printify.list_blueprints()
-    blueprint = _pick_blueprint(product_type, blueprints)
-    if blueprint is None:
+    matches = _matching_blueprints(product_type, blueprints)
+    if not matches:
         return {"ok": False, "reason": f"no blueprint match for product_type={product_type!r}"}
 
-    providers = await printify.get_print_providers(blueprint["id"])
-    au_providers = [p for p in providers if _is_au(p)]
-    if not au_providers:
-        return {
-            "ok": False,
-            "reason": f"no AU print providers for blueprint {blueprint['id']} ({blueprint.get('title')})",
-        }
-
-    # For each AU provider fetch variants and compute base cost. Pick the
-    # cheapest by base price. Carry forward the variant IDs for the listing
-    # agent to use later.
     best: dict[str, Any] | None = None
-    for provider in au_providers:
-        variants_resp = await printify.get_variants(blueprint["id"], provider["id"])
-        variants = variants_resp.get("variants") or []
-        if not variants:
+    scanned = 0
+    for blueprint in matches:
+        scanned += 1
+        providers = await printify.get_print_providers(blueprint["id"])
+        au_providers = [p for p in providers if _is_au(p)]
+        if not au_providers:
             continue
-        base = _min_variant_price(variants)
-        candidate = {
-            "blueprint_id": blueprint["id"],
-            "print_provider_id": provider["id"],
-            "provider_name": provider.get("title") or provider.get("name") or "Unknown",
-            "variant_ids": [v["id"] for v in variants if v.get("is_available", True)],
-            "base_cost": base,
-        }
-        if best is None or candidate["base_cost"] < best["base_cost"]:
-            best = candidate
+        for provider in au_providers:
+            variants_resp = await printify.get_variants(blueprint["id"], provider["id"])
+            variants = variants_resp.get("variants") or []
+            if not variants:
+                continue
+            base = _min_variant_price(variants)
+            if base == float("inf"):
+                continue
+            # Catalog endpoint usually returns 0 (no price field exists on
+            # catalog variants). Fall back to a per-product-type estimate so
+            # listing_agent doesn't compute a retail of $1.95.
+            if base <= 0:
+                base = _DEFAULT_BASE_COST_AUD.get(product_type, 10.0)
+            candidate = {
+                "blueprint_id": blueprint["id"],
+                "print_provider_id": provider["id"],
+                "provider_name": provider.get("title") or provider.get("name") or "Unknown",
+                "variant_ids": [v["id"] for v in variants if v.get("is_available", True)],
+                "base_cost": base,
+            }
+            if best is None or candidate["base_cost"] < best["base_cost"]:
+                best = candidate
+        # Early-exit heuristic: once we've found at least one AU-producible
+        # blueprint AND scanned a reasonable window of matches, stop. Otherwise
+        # a "t-shirt" search would walk 253 blueprints every time.
+        if best is not None and scanned >= 8:
+            break
 
     if best is None:
-        return {"ok": False, "reason": "AU providers had no available variants"}
+        return {
+            "ok": False,
+            "reason": f"no AU print providers across {len(matches)} matching blueprints for {product_type!r}",
+        }
 
     best["ok"] = True
     return best

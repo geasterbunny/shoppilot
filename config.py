@@ -10,8 +10,11 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./shoppilot.db")
 MOCK_ETSY = os.getenv("MOCK_ETSY", "false").strip().lower() in ("1", "true", "yes", "on")
 MOCK_PRINTIFY = os.getenv("MOCK_PRINTIFY", "true").strip().lower() in ("1", "true", "yes", "on")
 MOCK_POSTIZ = os.getenv("MOCK_POSTIZ", "true").strip().lower() in ("1", "true", "yes", "on")
+MOCK_DESIGN = os.getenv("MOCK_DESIGN", "true").strip().lower() in ("1", "true", "yes", "on")
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+IDEOGRAM_API_KEY = os.getenv("IDEOGRAM_API_KEY", "")
+HF_API_KEY = os.getenv("HF_API_KEY", "")
 
 ETSY_API_KEY = os.getenv("ETSY_API_KEY", "")
 # Etsy's developer portal calls this the "Shared Secret". It's a SEPARATE value
