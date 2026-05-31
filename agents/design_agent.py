@@ -36,7 +36,7 @@ from database import ProductIdea, SupplierProduct
 
 logger = logging.getLogger("shoppilot.design_agent")
 
-IDEOGRAM_GENERATE_URL = "https://api.ideogram.ai/generate"
+IDEOGRAM_GENERATE_URL = "https://api.ideogram.ai/v1/ideogram-v3/generate"
 PRINTIFY_UPLOAD_URL = "https://api.printify.com/v1/uploads/images.json"
 REQUEST_TIMEOUT = 120.0  # Ideogram V3 takes 15-45s; allow headroom.
 
@@ -52,11 +52,11 @@ _SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 #   composition  — where on the product the design sits (chest print, mug wrap,
 #                  poster fill, card cover)
 #   style        — aesthetic direction tuned to AU novelty merch
-#   aspect_ratio — Ideogram aspect constant matching the printable area
+#   aspect_ratio — Ideogram V3 aspect ratio (WIDTHxHEIGHT) for the printable area
 #
 # Aspect ratios are intentionally coarse — Printify will scale and crop to fit
-# each variant. Squares (ASPECT_1_1) cover mugs/tees broadly; portrait
-# (ASPECT_3_4) suits posters and cards.
+# each variant. Squares (1x1) cover mugs/tees broadly; portrait (3x4) suits
+# posters and cards.
 
 _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
     "t-shirt": {
@@ -69,7 +69,7 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
             "thick confident outlines, palette of warm earthy tones with one accent color, "
             "screen-print aesthetic, NOT a photograph"
         ),
-        "aspect_ratio": "ASPECT_1_1",
+        "aspect_ratio": "1x1",
     },
     "tshirt": {
         "composition": (
@@ -81,7 +81,7 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
             "thick confident outlines, palette of warm earthy tones with one accent color, "
             "screen-print aesthetic, NOT a photograph"
         ),
-        "aspect_ratio": "ASPECT_1_1",
+        "aspect_ratio": "1x1",
     },
     "mug": {
         "composition": (
@@ -95,7 +95,7 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
             "warm Australian colour palette (ochre, eucalyptus green, sky blue), "
             "text is the dominant element — icon is secondary and small"
         ),
-        "aspect_ratio": "ASPECT_1_1",
+        "aspect_ratio": "1x1",
     },
     "tote": {
         "composition": (
@@ -106,7 +106,7 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
             "minimalist line-art illustration with one or two solid accent colors, "
             "modern Aussie indie design feel"
         ),
-        "aspect_ratio": "ASPECT_1_1",
+        "aspect_ratio": "1x1",
     },
     "poster": {
         "composition": (
@@ -118,7 +118,7 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
             "warm Australian palette of terracotta, deep teal, sun yellow, "
             "stylised illustration of landmarks or scenes"
         ),
-        "aspect_ratio": "ASPECT_3_4",
+        "aspect_ratio": "3x4",
     },
     "card": {
         "composition": (
@@ -131,7 +131,7 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
             "bold legible typography for the slogan, "
             "saturated playful colours"
         ),
-        "aspect_ratio": "ASPECT_3_4",
+        "aspect_ratio": "3x4",
     },
     "greeting_card": {
         "composition": (
@@ -144,7 +144,7 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
             "bold legible typography for the slogan, "
             "saturated playful colours"
         ),
-        "aspect_ratio": "ASPECT_3_4",
+        "aspect_ratio": "3x4",
     },
 }
 
@@ -155,7 +155,7 @@ _DEFAULT_TEMPLATE: dict[str, str] = {
         "print-ready, no bleed-edge details"
     ),
     "style": "bold flat-color illustration with playful character",
-    "aspect_ratio": "ASPECT_1_1",
+    "aspect_ratio": "1x1",
 }
 
 # Universal negatives that are always appended to the prompt to reduce common
@@ -264,18 +264,19 @@ async def _ideogram_generate(prompt: str, aspect_ratio: str) -> str:
     """Call Ideogram V3 and return the URL of the generated image."""
     if not config.IDEOGRAM_API_KEY:
         raise RuntimeError("IDEOGRAM_API_KEY is not set in config/.env")
-    body = {
-        "image_request": {
-            "prompt": prompt,
-            "aspect_ratio": aspect_ratio,
-            "model": "V_3",
-            "magic_prompt_option": "OFF",  # AUTO rewrites our prompt and garbles slogan text
-            "style_type": "DESIGN",
-        }
+    # V3 expects multipart/form-data with flat fields — no `image_request`
+    # wrapper and no `model` (the endpoint path selects V3). The (None, value)
+    # tuples make httpx emit each field as a plain multipart part and set the
+    # boundary Content-Type itself, so we don't set Content-Type by hand.
+    form = {
+        "prompt": (None, prompt),
+        "aspect_ratio": (None, aspect_ratio),
+        "magic_prompt": (None, "OFF"),  # AUTO rewrites our prompt and garbles slogan text
+        "style_type": (None, "DESIGN"),
     }
-    headers = {"Api-Key": config.IDEOGRAM_API_KEY, "Content-Type": "application/json"}
+    headers = {"Api-Key": config.IDEOGRAM_API_KEY}
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, verify=_SSL_CONTEXT) as client:
-        resp = await client.post(IDEOGRAM_GENERATE_URL, headers=headers, json=body)
+        resp = await client.post(IDEOGRAM_GENERATE_URL, headers=headers, files=form)
     if resp.status_code >= 400:
         raise RuntimeError(f"Ideogram {resp.status_code}: {resp.text[:500]}")
     data = resp.json().get("data") or []
@@ -315,15 +316,20 @@ async def _printify_upload(idea_id: int, image_bytes: bytes) -> str:
     return image_id
 
 
-async def _design_for_idea(idea: ProductIdea) -> str:
-    """End-to-end: prompt -> Ideogram V3 -> download -> Printify upload -> image_id."""
+async def _design_for_idea(idea: ProductIdea) -> tuple[str, str | None]:
+    """End-to-end: prompt -> Ideogram V3 -> download -> Printify upload.
+
+    Returns (printify_image_id, source_image_url). source_image_url is the
+    Ideogram-generated image URL, or None in mock mode where no image is made.
+    """
     if config.MOCK_DESIGN:
-        return f"mock_image_{idea.id}"
+        return f"mock_image_{idea.id}", None
     prompt, aspect = _build_prompt(idea)
     logger.info("design_agent: idea %s prompt: %s", idea.id, prompt[:200])
     image_url = await _ideogram_generate(prompt, aspect)
     image_bytes = await _download_bytes(image_url)
-    return await _printify_upload(idea.id, image_bytes)
+    image_id = await _printify_upload(idea.id, image_bytes)
+    return image_id, image_url
 
 
 async def run(db: Session) -> dict[str, Any]:
@@ -336,21 +342,29 @@ async def run(db: Session) -> dict[str, Any]:
     )
 
     designed = 0
+    products: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for supplier, idea in pending:
         try:
-            image_id = await _design_for_idea(idea)
+            image_id, image_url = await _design_for_idea(idea)
         except Exception as e:
             logger.exception("design_agent: idea %s failed", idea.id)
             skipped.append({"idea_id": idea.id, "reason": str(e)})
             continue
         supplier.image_id = image_id
         designed += 1
+        products.append({
+            "idea_id": idea.id,
+            "title": idea.product_title,
+            "image_id": image_id,
+            "image_url": image_url,
+        })
     db.commit()
 
     return {
         "status": "ok",
         "considered": len(pending),
         "designed": designed,
+        "products": products,
         "skipped": skipped,
     }

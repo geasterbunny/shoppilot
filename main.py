@@ -1,10 +1,14 @@
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
+import config
+import notifications
 import scheduler as scheduler_module
 from agents import (
     design_agent,
@@ -20,10 +24,15 @@ from database import (
     MarketingPost,
     ProductIdea,
     ResearchProduct,
+    SessionLocal,
     SupplierProduct,
     get_session,
     init_db,
 )
+
+logging.basicConfig(level=logging.INFO)
+
+logger = logging.getLogger("shoppilot.main")
 
 DASHBOARD_FILE = Path(__file__).resolve().parent / "dashboard" / "index.html"
 
@@ -156,14 +165,46 @@ def list_ideas(db: Session = Depends(get_session)):
     ]
 
 
+async def _run_approval_pipeline(idea_id: int) -> None:
+    """Run supplier → design → listing → marketing for an approved idea.
+
+    Runs in the background after the approve request has already returned, so it
+    opens its own DB session — the request-scoped session is closed by then.
+    Each agent's result is logged; a failure stops the chain but is swallowed.
+    """
+    db = SessionLocal()
+    try:
+        # Brief pause before the first agent opens its work on the new session,
+        # giving the approve-request commit time to settle.
+        await asyncio.sleep(1)
+        supplier_result = await supplier_agent.run(db)
+        logger.info("approve pipeline: idea %s supplier — %s", idea_id, supplier_result)
+        design_result = await design_agent.run(db)
+        logger.info("approve pipeline: idea %s design — %s", idea_id, design_result)
+        listing_result = await listing_agent.run(db)
+        logger.info("approve pipeline: idea %s listing — %s", idea_id, listing_result)
+        marketing_result = await marketing_agent.run(db)
+        logger.info("approve pipeline: idea %s marketing — %s", idea_id, marketing_result)
+    except Exception as e:
+        logger.exception("approve pipeline: idea %s failed: %s", idea_id, e)
+    finally:
+        db.close()
+
+
 @app.post("/ideas/{idea_id}/approve")
-def approve_idea(idea_id: int, db: Session = Depends(get_session)):
+def approve_idea(
+    idea_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_session),
+):
     idea = db.query(ProductIdea).filter(ProductIdea.id == idea_id).first()
     if idea is None:
         raise HTTPException(status_code=404, detail=f"Idea {idea_id} not found")
     idea.status = "approved"
     db.commit()
-    return {"id": idea.id, "status": idea.status}
+
+    background_tasks.add_task(_run_approval_pipeline, idea.id)
+    return {"status": "approved", "pipeline": "queued"}
 
 
 @app.post("/ideas/{idea_id}/reject")
@@ -206,9 +247,43 @@ def list_suppliers(db: Session = Depends(get_session)):
     ]
 
 
-@app.post("/run/design")
+@app.post("/agents/design/run")
 async def run_design_agent(db: Session = Depends(get_session)):
-    return await design_agent.run(db)
+    result = await design_agent.run(db)
+    notifications.send_design_notification(result)
+    return result
+
+
+@app.post("/notifications/test")
+def test_notification():
+    """Send a design-notification email with dummy data.
+
+    Lets us verify SMTP config (NOTIFICATION_EMAIL / SMTP_PASSWORD) without
+    re-running the design agent. Sending is best-effort — send_design_notification
+    swallows and logs any failure — so we surface whether config is present to
+    help interpret a silent skip.
+    """
+    dummy_result = {
+        "products": [
+            {
+                "idea_id": 0,
+                "title": "Test Product",
+                "image_id": "mock_image_test",
+                "image_url": "https://example.com/test.jpg",
+            }
+        ]
+    }
+    notifications.send_design_notification(dummy_result)
+    config_ready = bool(config.NOTIFICATION_EMAIL and config.SMTP_PASSWORD)
+    return {
+        "status": "ok",
+        "config_ready": config_ready,
+        "message": (
+            "Test email dispatched — check the inbox."
+            if config_ready
+            else "NOTIFICATION_EMAIL / SMTP_PASSWORD not set — email was skipped (see logs)."
+        ),
+    }
 
 
 @app.post("/agents/listing/run")

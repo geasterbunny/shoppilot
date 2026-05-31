@@ -76,13 +76,21 @@ _MOCK_BLUEPRINTS: list[dict[str, Any]] = [
 ]
 
 # Australian print providers we explicitly support per the spec.
+#
+# IMPORTANT: the provider IDs here MUST be in supplier_agent.AU_PROVIDER_IDS
+# ({34, 66}). That agent detects AU providers by ID alone — it ignores the
+# `location` field below because the real per-blueprint providers endpoint
+# doesn't return one. If these IDs drift from that set, _is_au() filters every
+# provider out and the agent reports "no AU print providers". Keep them aligned.
+#   34 = The Print Bar (Teneriffe, QLD)
+#   66 = Prima Printing (Noble Park North, VIC)
 _AU_PROVIDERS_BY_TYPE: dict[str, list[dict[str, Any]]] = {
-    "t-shirt":       [{"id": 99,  "title": "The Print Bar",  "location": {"country": "AU"}}],
-    "tote":          [{"id": 99,  "title": "The Print Bar",  "location": {"country": "AU"}},
-                      {"id": 105, "title": "Prima Printing", "location": {"country": "AU"}}],
-    "mug":           [{"id": 105, "title": "Prima Printing", "location": {"country": "AU"}}],
-    "poster":        [{"id": 105, "title": "Prima Printing", "location": {"country": "AU"}}],
-    "greeting_card": [{"id": 105, "title": "Prima Printing", "location": {"country": "AU"}}],
+    "t-shirt":       [{"id": 34, "title": "The Print Bar",  "location": {"country": "AU"}}],
+    "tote":          [{"id": 34, "title": "The Print Bar",  "location": {"country": "AU"}},
+                      {"id": 66, "title": "Prima Printing", "location": {"country": "AU"}}],
+    "mug":           [{"id": 66, "title": "Prima Printing", "location": {"country": "AU"}}],
+    "poster":        [{"id": 66, "title": "Prima Printing", "location": {"country": "AU"}}],
+    "greeting_card": [{"id": 66, "title": "Prima Printing", "location": {"country": "AU"}}],
 }
 
 # Non-AU providers — included so the AU filter has something to strip out.

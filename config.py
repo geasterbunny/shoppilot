@@ -36,6 +36,14 @@ PRINTIFY_SHOP_ID = os.getenv("PRINTIFY_SHOP_ID", "")
 POSTIZ_API_KEY = os.getenv("POSTIZ_API_KEY", "")
 POSTIZ_URL = os.getenv("POSTIZ_URL", "")
 
+# Gmail SMTP credentials for post-design notification emails. NOTIFICATION_EMAIL
+# is the sending Gmail account (also used as the From address); SMTP_PASSWORD is
+# its app password. Both empty by default — notifications are skipped if unset.
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+NOTIFICATION_EMAIL = os.getenv("NOTIFICATION_EMAIL", "")
+# Optional explicit From address; falls back to NOTIFICATION_EMAIL when empty.
+SMTP_FROM = os.getenv("SMTP_FROM", "")
+
 
 def _mask(value: str) -> str:
     if not value:
