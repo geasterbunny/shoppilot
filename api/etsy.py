@@ -117,25 +117,41 @@ async def refresh_access_token() -> dict[str, Any]:
 
 
 def _auth_headers() -> dict[str, str]:
-    # Empirical: Etsy v3 wants the SHARED SECRET in x-api-key, not the
-    # keystring (despite their own docs sometimes saying otherwise). With the
-    # keystring you get "Shared secret is required in x-api-key header". With
-    # the shared secret you get "incorrect shared secret" if the value is
-    # stale — but the request reaches the auth layer.
+    # Etsy v3 "Personal Access" apps require x-api-key to be the keystring and
+    # shared secret joined by a colon: "<keystring>:<shared_secret>". Verified
+    # empirically against /openapi-ping:
+    #   keystring alone        -> 403 "Shared secret is required in x-api-key header"
+    #   shared secret alone    -> 403 "incorrect shared secret for API key"
+    #   keystring:shared_secret -> 200 {"application_id": ...}
+    # (An earlier comment here wrongly concluded the shared secret alone was
+    # correct — that always 403'd, which is why every live Etsy call failed.)
+    if not config.ETSY_API_KEY:
+        raise RuntimeError("ETSY_API_KEY is not set in config/.env")
     if not config.ETSY_SHARED_SECRET:
         raise RuntimeError("ETSY_SHARED_SECRET is not set in config/.env")
     if not config.ETSY_ACCESS_TOKEN:
         raise RuntimeError("ETSY_ACCESS_TOKEN is not set in config/.env")
     return {
-        "x-api-key": config.ETSY_SHARED_SECRET,
+        "x-api-key": f"{config.ETSY_API_KEY}:{config.ETSY_SHARED_SECRET}",
         "Authorization": f"Bearer {config.ETSY_ACCESS_TOKEN}",
     }
 
 
-async def _request(method: str, path: str, **kwargs: Any) -> Any:
+async def _request(method: str, path: str, _allow_refresh: bool = True, **kwargs: Any) -> Any:
     url = f"{ETSY_API_BASE}{path}"
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, verify=_SSL_CONTEXT) as client:
         resp = await client.request(method, url, headers=_auth_headers(), **kwargs)
+    # Etsy access tokens expire after 1 hour. On a 401 (expired/invalid token)
+    # refresh once using the stored refresh token, update the in-memory token,
+    # and retry the request a single time before giving up.
+    if resp.status_code == 401 and _allow_refresh and config.ETSY_REFRESH_TOKEN:
+        tokens = await refresh_access_token()
+        new_access = tokens.get("access_token")
+        if new_access:
+            config.ETSY_ACCESS_TOKEN = new_access
+            if tokens.get("refresh_token"):
+                config.ETSY_REFRESH_TOKEN = tokens["refresh_token"]
+            return await _request(method, path, _allow_refresh=False, **kwargs)
     if resp.status_code != 200:
         raise EtsyAPIError(resp.status_code, resp.text)
     return resp.json()

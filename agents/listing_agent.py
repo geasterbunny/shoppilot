@@ -47,7 +47,48 @@ def _retail_price_cents(base_cost_aud: float) -> int:
     return whole * 100 + 95  # e.g. $20.95
 
 
-def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) -> dict[str, Any]:
+async def _discover_print_positions(
+    blueprint_id: int, provider_id: int, variant_ids: list[int]
+) -> list[str]:
+    """Query Printify's catalog for the placeholder positions a blueprint accepts.
+
+    The catalog variants endpoint
+    (/catalog/blueprints/{bp}/print_providers/{pp}/variants.json) returns each
+    variant with a `placeholders` list describing the print areas Printify will
+    accept on create_product — e.g. [{"position": "front", ...}] for a tee,
+    [{"position": "front"}, {"position": "back"}] for a mug, ["cover"] for some
+    cards. Live create_product rejects a print_areas placeholder whose position
+    isn't in that set, so we discover it per-blueprint rather than hard-coding
+    "front" (which is wrong for at least greeting cards).
+
+    Returns ["front"] when front is available (the common case and our intended
+    print location), otherwise the first discovered position. Falls back to
+    ["front"] when the catalog gives us nothing — e.g. MOCK_PRINTIFY mode, whose
+    variant stubs carry no placeholders and whose create_product ignores
+    print_areas anyway.
+    """
+    try:
+        resp = await printify.get_variants(blueprint_id, provider_id)
+    except Exception:
+        return ["front"]
+    variants = resp.get("variants") or []
+    wanted = set(variant_ids)
+    positions: list[str] = []
+    for v in variants:
+        if wanted and v.get("id") not in wanted:
+            continue
+        for ph in v.get("placeholders") or []:
+            pos = ph.get("position")
+            if pos and pos not in positions:
+                positions.append(pos)
+    if "front" in positions:
+        return ["front"]
+    if positions:
+        return [positions[0]]
+    return ["front"]
+
+
+async def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) -> dict[str, Any]:
     try:
         variant_ids = json.loads(supplier.variant_ids or "[]")
     except json.JSONDecodeError:
@@ -57,20 +98,28 @@ def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) -> dic
         {"id": vid, "price": price_cents, "is_enabled": True}
         for vid in variant_ids
     ]
-    # Live Printify needs print_areas describing where each image sits on each
-    # variant. The design_agent populates supplier.image_id; if it hasn't run
-    # yet we omit print_areas entirely so create_product can still draft in
-    # mock mode without a placeholder.
-    print_areas = (
-        [
+    # Live Printify rejects create_product with an empty print_areas. We build a
+    # real one keyed on the design image the design_agent already uploaded to
+    # Printify's image library (supplier.image_id holds that Printify image id —
+    # NOT the Ideogram URL; design_agent does the POST /uploads/images.json step
+    # and persists the returned id). The placeholder position is discovered from
+    # the live catalog so it's correct for every product type (mug, tote,
+    # t-shirt, poster, greeting_card). If image_id is unset we omit print_areas
+    # so mock-mode drafts still work without a placeholder.
+    print_areas: list[dict[str, Any]] = []
+    if supplier.image_id:
+        positions = await _discover_print_positions(
+            supplier.blueprint_id, supplier.print_provider_id, variant_ids
+        )
+        print_areas = [
             {
                 "variant_ids": variant_ids,
                 "placeholders": [
                     {
-                        "position": "front",
+                        "position": pos,
                         "images": [
                             {
-                                "id": supplier.image_id or "mock_image",
+                                "id": supplier.image_id,
                                 "x": 0.5,
                                 "y": 0.5,
                                 "scale": 1.0,
@@ -78,12 +127,10 @@ def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) -> dic
                             }
                         ],
                     }
+                    for pos in positions
                 ],
             }
         ]
-        if supplier.image_id
-        else []
-    )
     return {
         "title": idea.product_title or "",
         "description": idea.description or "",
@@ -110,7 +157,7 @@ async def _publish_one(
 ) -> dict[str, Any]:
     """Run the create → publish → patch flow for a single supplier match."""
     printify_shop_id = config.PRINTIFY_SHOP_ID or "mock_shop"
-    payload = _build_printify_payload(idea, supplier)
+    payload = await _build_printify_payload(idea, supplier)
 
     try:
         created = await printify.create_product(printify_shop_id, payload)

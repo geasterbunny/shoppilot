@@ -1,9 +1,23 @@
 import os
+import sys
+
+# Use the OS (Windows) trust store for TLS instead of certifi's bundled CAs.
+# This machine sits behind a TLS-inspecting proxy/AV whose root CA is installed
+# in the Windows certificate store but NOT in certifi — so httpx/anthropic calls
+# fail with CERTIFICATE_VERIFY_FAILED. Injecting truststore early (before any
+# HTTP client is constructed) makes every SSL connection trust the OS store.
+import truststore
+
+if sys.platform == "win32":
+    truststore.inject_into_ssl()
 
 from dotenv import find_dotenv, load_dotenv
 
 ENV_FILE = find_dotenv(usecwd=True)
-_loaded = load_dotenv(ENV_FILE)
+# override=True so values in .env win over variables already present (possibly
+# empty) in the inherited shell environment — e.g. a blank ANTHROPIC_API_KEY
+# exported by the parent process would otherwise shadow the real key here.
+_loaded = load_dotenv(ENV_FILE, override=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./shoppilot.db")
 
