@@ -31,10 +31,17 @@ RETAIL_MARKUP = 2.5
 
 
 def _tags_list(tag_str: str | None) -> list[str]:
-    """Etsy tags come from idea_agent as a comma-separated string."""
+    """Etsy tags come from idea_agent as a comma-separated string.
+
+    Etsy enforces two hard limits: at most 13 tags, each at most 20 characters.
+    We drop over-length tags entirely (truncating mid-phrase produces junk like
+    "kids room decor aust") rather than letting a single long tag 400 the whole
+    listing PATCH with "/tags : cannot be more than 20 characters".
+    """
     if not tag_str:
         return []
-    return [t.strip() for t in tag_str.split(",") if t.strip()][:13]
+    tags = [t.strip() for t in tag_str.split(",") if t.strip() and len(t.strip()) <= 20]
+    return tags[:13]
 
 
 def _retail_price_cents(base_cost_aud: float) -> int:

@@ -161,6 +161,15 @@ async def get_shop(shop_id: str | int) -> dict[str, Any]:
     return await _request("GET", f"/shops/{shop_id}")
 
 
+async def update_shop(
+    shop_id: str | int, data: dict[str, Any], method: str = "PUT"
+) -> dict[str, Any]:
+    """Update shop fields (e.g. title/announcement). Etsy's updateShop is a PUT
+    on /shops/{shop_id} with form-encoded fields; the tagline field is `title`.
+    Requires the shops_w scope (present in DEFAULT_SCOPES)."""
+    return await _request(method, f"/shops/{shop_id}", data=data)
+
+
 async def get_my_shops() -> dict[str, Any]:
     """Fetch shops owned by the authenticated user.
 

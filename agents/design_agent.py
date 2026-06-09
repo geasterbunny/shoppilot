@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import ssl
 from typing import Any
 
@@ -85,10 +86,12 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
     },
     "mug": {
         "composition": (
-            "centered mug print design, large bold slogan text fills the upper two-thirds, "
-            "one small simple decorative icon or illustration below the text only, "
-            "clean solid white background — NO maps, NO background illustrations, "
-            "NO additional text labels anywhere on the design"
+            "flat 2D print-ready graphic on a plain solid white background — NOT a "
+            "3D product mockup, NO drawn object or product shape behind or around "
+            "the design, just the printable design itself. Large bold slogan text "
+            "fills the upper two-thirds, one small simple decorative icon below the "
+            "text — NO maps, NO background illustrations, NO additional text labels "
+            "anywhere"
         ),
         "style": (
             "bold typographic design with a single simple flat-color Aussie icon accent, "
@@ -99,8 +102,10 @@ _PRODUCT_TEMPLATES: dict[str, dict[str, str]] = {
     },
     "tote": {
         "composition": (
-            "centered tote-bag print, single bold motif, solid white background, "
-            "high-contrast composition that reads from across a room"
+            "flat 2D print-ready graphic on a plain solid white background — NOT a "
+            "3D product mockup, NO drawn object or product shape, just the printable "
+            "design itself: a single bold centered motif, high-contrast and readable "
+            "from across a room"
         ),
         "style": (
             "minimalist line-art illustration with one or two solid accent colors, "
@@ -163,7 +168,9 @@ _DEFAULT_TEMPLATE: dict[str, str] = {
 _NEGATIVE_GUIDANCE = (
     "Avoid: misspelled text, garbled typography, watermarks, signatures, "
     "stock-photo backgrounds, photorealistic depictions of real people, "
-    "additional text beyond the specified slogan."
+    "additional text beyond the specified slogan, 3D product mockups, and any "
+    "depiction of a physical product or object the design sits on — output "
+    "ONLY the flat printable design on a plain background."
 )
 
 
@@ -174,22 +181,63 @@ def _normalise_product_type(raw: str | None) -> str:
     return raw.strip().lower().replace(" ", "_").replace("-", "_")
 
 
+# Personalisation placeholders the idea_agent emits in slogans (e.g. "Strewth
+# [Name] It's Too Early" for personalised products). The listing-photo art must
+# show a representative SAMPLE value, not the literal bracketed token — the
+# buyer supplies their own value at checkout. Known tokens map to a sample;
+# unknown [Tokens] are stripped so they never print verbatim.
+_SAMPLE_PLACEHOLDERS: dict[str, str] = {
+    "name": "Sheila",
+    "city": "Brisbane",
+    "state": "Queensland",
+    "town": "Broome",
+    "hometown": "Brisbane",
+}
+
+
+def _fill_placeholders(text: str | None) -> str | None:
+    """Replace [Token] placeholders with a sample value (strip if unknown)."""
+    if not text or "[" not in text:
+        return text
+
+    def _sub(m: "re.Match[str]") -> str:
+        key = m.group(1).strip().lower()
+        return _SAMPLE_PLACEHOLDERS.get(key, "")
+
+    out = re.sub(r"\[([^\]]+)\]", _sub, text)
+    # Tidy doubled spaces / stray spaces before punctuation left by a strip.
+    out = re.sub(r"\s{2,}", " ", out)
+    out = re.sub(r"\s+([!?.,])", r"\1", out)
+    return out.strip()
+
+
 def _extract_slogan(title: str | None) -> str | None:
     """Pull the quoted slogan out of an idea title.
 
-    ShopPilot's idea_agent generates titles in the format::
+    ShopPilot's idea_agent generates titles in two separator styles — the early
+    ideas use pipes, the later ones use dashes::
         Some prefix | 'The Slogan Goes Here' | Some suffix
+        Some prefix - 'The Slogan Goes Here' Some SEO suffix
+
+    We therefore split on BOTH pipes and dash separators. This is critical: if a
+    dash-separated title isn't split, no segment starts with a quote, the slogan
+    is missed, and the idea falls through to the non-slogan path — which feeds
+    the FULL SEO title (e.g. "...Coffee Mug Gift") to Ideogram as the thing to
+    illustrate, so the model literally draws a mug. (That bug shipped product
+    shapes into the printable artwork for every dash-titled slogan product.)
 
     Titles may contain apostrophes inside the slogan ("Nanna's Little Ratbags",
-    "Can't Parallel Park"). The split-by-pipe-then-rfind-apostrophe heuristic
-    handles those without false positives.
+    "Can't Parallel Park"). Taking the body after the opening quote and slicing
+    to the LAST apostrophe in the segment handles those — any SEO suffix after
+    the closing quote carries no apostrophes in practice.
 
     Returns None when no quoted slogan is present (e.g. illustrative ideas like
-    the scratch-off poster).
+    the scratch-off poster or the native-animal nursery set).
     """
     if not title:
         return None
-    for segment in title.split("|"):
+    # Split on " | ", " - ", " – ", " — " (spaced separators) and bare pipes.
+    for segment in re.split(r"\s*\|\s*|\s+[-–—]\s+", title):
         seg = segment.strip()
         if seg.startswith("'"):
             body = seg[1:]
@@ -209,14 +257,16 @@ def _build_prompt(idea: ProductIdea) -> tuple[str, str]:
         or _DEFAULT_TEMPLATE
     )
 
-    slogan = _extract_slogan(idea.product_title)
+    slogan = _fill_placeholders(_extract_slogan(idea.product_title))
     parts: list[str] = []
 
     # 1. Headline of what we're making
     if slogan:
         word_count = len(slogan.split())
         parts.append(
-            f"Typography-first {product_type.replace('_', ' ')} design. "
+            f"Flat die-cut sticker design, isolated on a plain empty background "
+            f"with nothing else in the frame — no objects, no product, no 3D mockup, "
+            f"just the graphic floating on a blank background. "
             f"The ONLY text in the design is this {word_count}-word slogan, "
             f'spelled exactly: "{slogan}". '
             f"Every word must be perfectly spelled — letter-perfect. "
@@ -226,10 +276,20 @@ def _build_prompt(idea: ProductIdea) -> tuple[str, str]:
         # Use only the first pipe-segment of the title to avoid feeding the full
         # product name (e.g. "Scratch-Off Bucket List Poster | ... | ...") as a
         # visual prompt — only the first segment describes the visual concept.
-        short_title = (idea.product_title or "").split("|")[0].strip()
+        short_title = _fill_placeholders((idea.product_title or "").split("|")[0].strip()) or ""
         parts.append(
             f"A {product_type.replace('_', ' ')} design illustrating: "
             f"{short_title or idea.description or 'an Australian-themed product'}."
+        )
+        # Non-slogan designs are illustration-led. Text-heavy SEO titles
+        # ("...Wombat Quokka Echidna Watercolour Wall Art Kids Room Decor")
+        # otherwise get rendered AS garbled text labels. Force the subjects to be
+        # drawn and cap any text to a short, correctly-spelled heading.
+        parts.append(
+            "Render every subject as an ILLUSTRATION, not as written words. The "
+            "only text allowed is a short heading of at most two words, spelled "
+            "exactly and correctly. Do NOT render product keywords, descriptive "
+            "phrases, or subject names as text labels."
         )
 
     # 2. Composition
