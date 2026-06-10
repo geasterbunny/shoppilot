@@ -54,6 +54,20 @@ def _retail_price_cents(base_cost_aud: float) -> int:
     return whole * 100 + 95  # e.g. $20.95
 
 
+# Garment colours dark enough to need the light-ink artwork. Checked as
+# substrings against the variant title (works regardless of "Colour / Size" vs
+# "Size / Colour" ordering). Navy is the important non-obvious one.
+_DARK_COLOURS = (
+    "black", "navy", "dark", "coal", "charcoal", "forest", "chocolate",
+    "maroon", "graphite", "midnight", "indigo", "olive",
+)
+
+
+def _is_dark_colour(title: str) -> bool:
+    t = (title or "").lower()
+    return any(c in t for c in _DARK_COLOURS)
+
+
 def _placeholder(image_id: str, position: str) -> dict[str, Any]:
     return {
         "position": position,
@@ -99,8 +113,8 @@ async def _build_print_areas(
     if supplier.image_id_dark:
         light_ids, dark_ids = [], []
         for vid in variant_ids:
-            title = (by_id.get(vid) or {}).get("title", "").lower()
-            (dark_ids if ("black" in title or "dark" in title) else light_ids).append(vid)
+            title = (by_id.get(vid) or {}).get("title", "")
+            (dark_ids if _is_dark_colour(title) else light_ids).append(vid)
         areas: list[dict[str, Any]] = []
         if light_ids:
             areas.append({"variant_ids": light_ids,

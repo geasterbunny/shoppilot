@@ -405,15 +405,21 @@ def _remove_background(image_bytes: bytes, thresh: int = 70) -> bytes:
 
 
 def _is_garment(product_type: str | None) -> bool:
-    """Apparel printed on both light and dark fabrics — tees and totes. These get
-    the dual-ink transparent treatment so the artwork reads on every colour."""
+    """Apparel printed on both light and dark fabrics — tees, totes, hoodies.
+    These get the dual-ink transparent treatment so the artwork reads on every
+    fabric colour."""
     pt = (product_type or "").lower()
-    return ("shirt" in pt or "tee" in pt or "tote" in pt
-            or _normalise_product_type(product_type) == "tshirt")
+    return ("shirt" in pt or "tee" in pt or "tote" in pt or "hoodie" in pt
+            or "sweatshirt" in pt or _normalise_product_type(product_type) == "tshirt")
 
 
 def _garment_kind(product_type: str | None) -> str:
-    return "tote bag" if "tote" in (product_type or "").lower() else "t-shirt"
+    pt = (product_type or "").lower()
+    if "tote" in pt:
+        return "tote bag"
+    if "hoodie" in pt or "sweatshirt" in pt:
+        return "hoodie"
+    return "t-shirt"
 
 
 def _garment_theme(idea: ProductIdea) -> str:
