@@ -23,6 +23,7 @@ When MOCK_DESIGN=true the agent stamps a deterministic fake image_id
 from __future__ import annotations
 
 import base64
+import io
 import logging
 import re
 import ssl
@@ -30,6 +31,7 @@ from typing import Any
 
 import httpx
 import truststore
+from PIL import Image, ImageDraw
 from sqlalchemy.orm import Session
 
 import config
@@ -376,20 +378,113 @@ async def _printify_upload(idea_id: int, image_bytes: bytes) -> str:
     return image_id
 
 
-async def _design_for_idea(idea: ProductIdea) -> tuple[str, str | None]:
-    """End-to-end: prompt -> Ideogram V3 -> download -> Printify upload.
+_BG_SENTINEL = (255, 0, 255)
 
-    Returns (printify_image_id, source_image_url). source_image_url is the
-    Ideogram-generated image URL, or None in mock mode where no image is made.
+
+def _remove_background(image_bytes: bytes, thresh: int = 70) -> bytes:
+    """Knock out a solid (white OR black) background to transparency.
+
+    Flood-fills from the image border with a sentinel colour, then maps the
+    sentinel to alpha=0. The seed pixel IS the corner colour, so this auto-adapts
+    to a white background (light-garment art) or a black one (dark-garment art).
+    Interior regions of the same colour that aren't connected to the border are
+    preserved — so the print is just the artwork, no surrounding ink block.
+    """
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    w, h = img.size
+    seeds = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1),
+             (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]
+    for seed in seeds:
+        ImageDraw.floodfill(img, seed, _BG_SENTINEL, thresh=thresh)
+    rgba = img.convert("RGBA")
+    rgba.putdata([(r, g, b, 0) if (r, g, b) == _BG_SENTINEL else (r, g, b, 255)
+                  for (r, g, b, _a) in rgba.getdata()])
+    out = io.BytesIO()
+    rgba.save(out, format="PNG")
+    return out.getvalue()
+
+
+def _is_garment(product_type: str | None) -> bool:
+    """Apparel printed on both light and dark fabrics — tees and totes. These get
+    the dual-ink transparent treatment so the artwork reads on every colour."""
+    pt = (product_type or "").lower()
+    return ("shirt" in pt or "tee" in pt or "tote" in pt
+            or _normalise_product_type(product_type) == "tshirt")
+
+
+def _garment_kind(product_type: str | None) -> str:
+    return "tote bag" if "tote" in (product_type or "").lower() else "t-shirt"
+
+
+def _garment_theme(idea: ProductIdea) -> str:
+    """Pull a short illustration theme from the title prefix (before the product noun)."""
+    head = re.split(r"t-?shirt|tee|tote\s*bag|tote|bag", idea.product_title or "",
+                    maxsplit=1, flags=re.I)[0]
+    head = re.sub(r"\bfunny\b|\baustralian\b", "", head, flags=re.I)
+    return head.strip(" -|").strip()
+
+
+def _build_garment_prompts(idea: ProductIdea) -> tuple[str, str, str]:
+    """Two illustrated prompts for a garment: (light-fabric, dark-fabric, aspect).
+
+    Light-fabric art = dark ink on white background; dark-fabric art = light
+    (cream/white) ink on black background. Each is a detailed screen-print
+    illustration, NOT a flat colour-block sticker, isolated for transparency.
+    """
+    slogan = _fill_placeholders(_extract_slogan(idea.product_title)) or ""
+    theme = _garment_theme(idea)
+    kind = _garment_kind(idea.product_type)
+    subject = f"that fits an Australian {theme} theme" if theme else "with authentic Australian character"
+    common = (
+        f"A high-quality vintage screen-print illustration for a {kind}: a single "
+        f"characterful illustration {subject}, with the bold hand-lettered slogan "
+        f'"{slogan}" integrated into the design. Detailed inky linework, halftone '
+        f"shading and subtle distressed vintage texture. "
+    )
+    margin = (
+        f"with a clear empty margin all around — NO coloured panel, NO box, NO frame, "
+        f"NO sticker outline, NO {kind} shown, NOT a mockup, NOT a photo. "
+        f'Spell exactly: "{slogan}".'
+    )
+    light = common + (
+        "Warm retro palette with dark charcoal linework and lettering, isolated on a "
+        "plain pure WHITE background "
+    ) + margin
+    dark = common + (
+        "CREAM and WHITE linework and lettering with warm ochre and rust colour fills, "
+        "designed to stand out on a dark fabric, isolated on a solid pure BLACK "
+        "background "
+    ) + margin
+    return light, dark, "1x1"
+
+
+async def _design_for_idea(idea: ProductIdea) -> tuple[str, str | None, str | None]:
+    """End-to-end design generation.
+
+    Returns (image_id, image_id_dark, source_url). For t-shirts we generate TWO
+    transparent illustrations — image_id is the light-garment (dark-ink) design,
+    image_id_dark is the dark-garment (light-ink) design. For every other product
+    image_id_dark is None.
     """
     if config.MOCK_DESIGN:
-        return f"mock_image_{idea.id}", None
+        return f"mock_image_{idea.id}", None, None
+
+    if _is_garment(idea.product_type):
+        light_prompt, dark_prompt, aspect = _build_garment_prompts(idea)
+        logger.info("design_agent: idea %s garment dual-design", idea.id)
+        light_url = await _ideogram_generate(light_prompt, aspect)
+        light_png = _remove_background(await _download_bytes(light_url))
+        light_id = await _printify_upload(idea.id, light_png)
+        dark_url = await _ideogram_generate(dark_prompt, aspect)
+        dark_png = _remove_background(await _download_bytes(dark_url))
+        dark_id = await _printify_upload(idea.id, dark_png)
+        return light_id, dark_id, light_url
+
     prompt, aspect = _build_prompt(idea)
     logger.info("design_agent: idea %s prompt: %s", idea.id, prompt[:200])
     image_url = await _ideogram_generate(prompt, aspect)
-    image_bytes = await _download_bytes(image_url)
-    image_id = await _printify_upload(idea.id, image_bytes)
-    return image_id, image_url
+    image_id = await _printify_upload(idea.id, await _download_bytes(image_url))
+    return image_id, None, image_url
 
 
 async def run(db: Session) -> dict[str, Any]:
@@ -406,17 +501,19 @@ async def run(db: Session) -> dict[str, Any]:
     skipped: list[dict[str, Any]] = []
     for supplier, idea in pending:
         try:
-            image_id, image_url = await _design_for_idea(idea)
+            image_id, image_id_dark, image_url = await _design_for_idea(idea)
         except Exception as e:
             logger.exception("design_agent: idea %s failed", idea.id)
             skipped.append({"idea_id": idea.id, "reason": str(e)})
             continue
         supplier.image_id = image_id
+        supplier.image_id_dark = image_id_dark
         designed += 1
         products.append({
             "idea_id": idea.id,
             "title": idea.product_title,
             "image_id": image_id,
+            "image_id_dark": image_id_dark,
             "image_url": image_url,
         })
     db.commit()

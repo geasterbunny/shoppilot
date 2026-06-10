@@ -6,3 +6,4 @@ truststore
 apscheduler
 python-dotenv
 anthropic
+Pillow

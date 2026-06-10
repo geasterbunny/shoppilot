@@ -61,6 +61,11 @@ class SupplierProduct(Base):
     variant_ids = Column(Text)
     base_cost = Column(Float)
     image_id = Column(Text, nullable=True)
+    # Second design for dark/black garments (light-ink artwork). image_id holds
+    # the light-garment (dark-ink) design; image_id_dark holds the dark-garment
+    # (light-ink) design. Only populated for products with both light and dark
+    # variants (e.g. t-shirts: Solid White + Solid Black).
+    image_id_dark = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.current_timestamp())
 
 
@@ -95,10 +100,11 @@ def init_db() -> None:
     # OperationalError ("duplicate column name: image_id") when the column is
     # already present — that's fine, swallow it.
     with engine.begin() as conn:
-        try:
-            conn.execute(text("ALTER TABLE supplier_products ADD COLUMN image_id TEXT"))
-        except OperationalError:
-            pass
+        for col in ("image_id", "image_id_dark"):
+            try:
+                conn.execute(text(f"ALTER TABLE supplier_products ADD COLUMN {col} TEXT"))
+            except OperationalError:
+                pass
 
 
 def get_session():

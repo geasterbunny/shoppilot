@@ -14,13 +14,14 @@ SYSTEM_PROMPT = """You are a product strategist for an Australian Etsy print-on-
 Given trending Etsy listings in the Australian niche, generate 5 original
 product ideas. Each idea must:
 - Have a genuine Australian theme (slang, humour, native animals, states, landmarks)
-- Be suitable for print-on-demand (mug, tote, t-shirt, poster, greeting_card)
+- Be suitable for print-on-demand (mug, tote, t-shirt, poster)
 - Include a personalisation angle where possible
 - NOT copy existing listings — differentiate with a unique angle
+- NEVER use greeting cards — they are discontinued; do not propose any card products
 
 Return a JSON array of exactly 5 objects, each with these fields:
 - product_title: SEO-optimised Etsy title (max 140 chars)
-- product_type: one of: mug, tote, t-shirt, poster, greeting_card
+- product_type: one of: mug, tote, t-shirt, poster
 - description: 3-sentence listing description in friendly Australian voice
 - tags: comma-separated string of exactly 13 Etsy tags
 - target_buyer: one sentence describing who buys this

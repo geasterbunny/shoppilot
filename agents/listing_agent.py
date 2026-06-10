@@ -54,45 +54,64 @@ def _retail_price_cents(base_cost_aud: float) -> int:
     return whole * 100 + 95  # e.g. $20.95
 
 
-async def _discover_print_positions(
-    blueprint_id: int, provider_id: int, variant_ids: list[int]
-) -> list[str]:
-    """Query Printify's catalog for the placeholder positions a blueprint accepts.
+def _placeholder(image_id: str, position: str) -> dict[str, Any]:
+    return {
+        "position": position,
+        "images": [{"id": image_id, "x": 0.5, "y": 0.5, "scale": 1.0, "angle": 0}],
+    }
 
-    The catalog variants endpoint
-    (/catalog/blueprints/{bp}/print_providers/{pp}/variants.json) returns each
-    variant with a `placeholders` list describing the print areas Printify will
-    accept on create_product — e.g. [{"position": "front", ...}] for a tee,
-    [{"position": "front"}, {"position": "back"}] for a mug, ["cover"] for some
-    cards. Live create_product rejects a print_areas placeholder whose position
-    isn't in that set, so we discover it per-blueprint rather than hard-coding
-    "front" (which is wrong for at least greeting cards).
 
-    Returns ["front"] when front is available (the common case and our intended
-    print location), otherwise the first discovered position. Falls back to
-    ["front"] when the catalog gives us nothing — e.g. MOCK_PRINTIFY mode, whose
-    variant stubs carry no placeholders and whose create_product ignores
-    print_areas anyway.
+async def _build_print_areas(
+    supplier: SupplierProduct, variant_ids: list[int]
+) -> list[dict[str, Any]]:
+    """Build the Printify print_areas for a product.
+
+    - Discovers the placeholder position from the live catalog (correct per
+      blueprint — "front" for tees/mugs/posters; cards use "cover", etc.).
+    - For garments with BOTH light and dark colourways (supplier.image_id_dark
+      set, e.g. t-shirts: Solid White + Solid Black), splits the variants by
+      colour and maps the dark-ink design to light shirts and the light-ink
+      design to dark shirts — so the artwork reads on every colour. Otherwise a
+      single design covers all variants.
+
+    Every variant in `variant_ids` is covered by exactly one print_area entry,
+    which Printify requires (it rejects products whose enabled variants aren't
+    all present in print_areas.*.variant_ids).
+
+    Returns [] when no design exists yet (mock-mode drafts).
     """
+    if not supplier.image_id:
+        return []
     try:
-        resp = await printify.get_variants(blueprint_id, provider_id)
+        resp = await printify.get_variants(supplier.blueprint_id, supplier.print_provider_id)
     except Exception:
-        return ["front"]
-    variants = resp.get("variants") or []
-    wanted = set(variant_ids)
+        resp = {}
+    by_id = {v.get("id"): v for v in (resp.get("variants") or [])}
+
     positions: list[str] = []
-    for v in variants:
-        if wanted and v.get("id") not in wanted:
-            continue
-        for ph in v.get("placeholders") or []:
+    for vid in variant_ids:
+        for ph in (by_id.get(vid) or {}).get("placeholders") or []:
             pos = ph.get("position")
             if pos and pos not in positions:
                 positions.append(pos)
-    if "front" in positions:
-        return ["front"]
-    if positions:
-        return [positions[0]]
-    return ["front"]
+    position = "front" if ("front" in positions or not positions) else positions[0]
+
+    if supplier.image_id_dark:
+        light_ids, dark_ids = [], []
+        for vid in variant_ids:
+            title = (by_id.get(vid) or {}).get("title", "").lower()
+            (dark_ids if ("black" in title or "dark" in title) else light_ids).append(vid)
+        areas: list[dict[str, Any]] = []
+        if light_ids:
+            areas.append({"variant_ids": light_ids,
+                          "placeholders": [_placeholder(supplier.image_id, position)]})
+        if dark_ids:
+            areas.append({"variant_ids": dark_ids,
+                          "placeholders": [_placeholder(supplier.image_id_dark, position)]})
+        return areas
+
+    return [{"variant_ids": variant_ids,
+             "placeholders": [_placeholder(supplier.image_id, position)]}]
 
 
 async def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) -> dict[str, Any]:
@@ -105,39 +124,7 @@ async def _build_printify_payload(idea: ProductIdea, supplier: SupplierProduct) 
         {"id": vid, "price": price_cents, "is_enabled": True}
         for vid in variant_ids
     ]
-    # Live Printify rejects create_product with an empty print_areas. We build a
-    # real one keyed on the design image the design_agent already uploaded to
-    # Printify's image library (supplier.image_id holds that Printify image id —
-    # NOT the Ideogram URL; design_agent does the POST /uploads/images.json step
-    # and persists the returned id). The placeholder position is discovered from
-    # the live catalog so it's correct for every product type (mug, tote,
-    # t-shirt, poster, greeting_card). If image_id is unset we omit print_areas
-    # so mock-mode drafts still work without a placeholder.
-    print_areas: list[dict[str, Any]] = []
-    if supplier.image_id:
-        positions = await _discover_print_positions(
-            supplier.blueprint_id, supplier.print_provider_id, variant_ids
-        )
-        print_areas = [
-            {
-                "variant_ids": variant_ids,
-                "placeholders": [
-                    {
-                        "position": pos,
-                        "images": [
-                            {
-                                "id": supplier.image_id,
-                                "x": 0.5,
-                                "y": 0.5,
-                                "scale": 1.0,
-                                "angle": 0,
-                            }
-                        ],
-                    }
-                    for pos in positions
-                ],
-            }
-        ]
+    print_areas = await _build_print_areas(supplier, variant_ids)
     return {
         "title": idea.product_title or "",
         "description": idea.description or "",
@@ -221,6 +208,11 @@ async def run(db: Session) -> dict[str, Any]:
     pending = (
         db.query(SupplierProduct, ProductIdea)
         .join(ProductIdea, SupplierProduct.idea_id == ProductIdea.id)
+        # Only publish APPROVED ideas. Without this, a rejected/discontinued idea
+        # that still has a SupplierProduct row (e.g. a deleted card whose supplier
+        # row was left behind) gets republished on the next run — its listing was
+        # removed, so it looks "unlisted" and silently comes back to life.
+        .filter(ProductIdea.status == "approved")
         .filter(~SupplierProduct.idea_id.in_(listed_supplier_idea_ids)
                 if listed_supplier_idea_ids else True)
         .all()
